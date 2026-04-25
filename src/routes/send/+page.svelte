@@ -1,28 +1,45 @@
 <script lang="ts">
-  import { File, X, UploadCloud, Laptop } from 'lucide-svelte';
-  import { peers, transfers } from '$lib/stores';
+  import { File, X, UploadCloud, Laptop, Search } from 'lucide-svelte';
+  import { peers, transfers, addToast } from '$lib/stores';
   import { invoke } from '@tauri-apps/api/core';
+  import { page } from '$app/stores';
+  import { formatSize, formatSpeed, formatETA } from '$lib/utils';
+  import { open } from '@tauri-apps/plugin-dialog';
 
   let selectedPeerId = $state('');
   let files = $state<{ name: string, size: number, path: string }[]>([]);
   let isDragging = $state(false);
 
+  $effect(() => {
+    const id = $page.url.searchParams.get('peerId');
+    if (id) selectedPeerId = id;
+  });
+
   function getInitials(name: string) {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
+  }
+
+  async function browseFiles() {
+    const selected = await open({ multiple: true, directory: false });
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
+      for (const p of paths) {
+        // In a real app we'd get file metadata from Rust if needed
+        // but for now we just push the path
+        files.push({ name: p.split('/').pop() || p, size: 0, path: p });
+      }
+    }
   }
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    // In Tauri, we can't easily get the full path from a standard web Drop event
-    // unless we use a plugin or handle it in Rust. 
-    // For this prototype, let's assume we use tauri-plugin-dialog or similar later.
     if (e.dataTransfer?.files) {
       Array.from(e.dataTransfer.files).forEach(f => {
         files.push({ 
           name: f.name, 
           size: f.size,
-          path: (f as any).path || f.name // .path is available in Tauri for dropped files
+          path: (f as any).path || f.name
         });
       });
     }
@@ -33,23 +50,27 @@
     if (!peer || files.length === 0) return;
 
     for (const file of files) {
-      const id = await invoke<string>('send_file', {
-        filePath: file.path,
-        recipientIp: peer.ip,
-        port: peer.port
-      });
+      try {
+        const id = await invoke<string>('send_file', {
+          filePath: file.path,
+          recipientIp: peer.ip,
+          port: peer.port
+        });
 
-      transfers.update(list => [
-        {
-          id,
-          fileName: file.name,
-          fileSize: file.size,
-          sender: 'You',
-          progress: 0,
-          status: 'pending'
-        },
-        ...list
-      ]);
+        transfers.update(list => [
+          {
+            id,
+            fileName: file.name,
+            fileSize: file.size,
+            sender: 'You',
+            progress: 0,
+            status: 'pending'
+          },
+          ...list
+        ]);
+      } catch (e: any) {
+        addToast(e.toString(), 'error');
+      }
     }
     files = [];
   }
@@ -85,6 +106,8 @@
   <div
     role="button"
     tabindex="0"
+    onclick={browseFiles}
+    onkeydown={(e) => e.key === 'Enter' && browseFiles()}
     ondragover={(e) => { e.preventDefault(); isDragging = true; }}
     ondragleave={() => isDragging = false}
     ondrop={handleDrop}
@@ -98,7 +121,7 @@
       <div class="w-16 h-16 bg-background border border-border-card rounded-2xl flex items-center justify-center mb-4 transition-transform duration-300 group-hover:-translate-y-1">
         <UploadCloud size={32} class={isDragging ? 'text-brand' : 'text-text-muted'} />
       </div>
-      <p class="text-lg font-medium text-text-primary mb-1">Drop files here</p>
+      <p class="text-lg font-medium text-text-primary mb-1">Drop files or click to browse</p>
       <p class="text-sm text-text-muted">Files will be sent to the selected device</p>
     </div>
   </div>
@@ -115,7 +138,7 @@
             </div>
             <div>
               <p class="text-sm font-medium text-text-primary truncate max-w-[300px]">{file.name}</p>
-              <p class="text-xs font-mono text-text-muted uppercase">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+              <p class="text-xs font-mono text-text-muted uppercase">{file.size > 0 ? formatSize(file.size) : 'Ready to send'}</p>
             </div>
           </div>
           <button 

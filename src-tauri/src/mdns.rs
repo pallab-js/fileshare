@@ -11,6 +11,7 @@ pub struct Peer {
     pub ip: String,
     pub port: u16,
     pub last_seen: i64,
+    pub device_type: String,
 }
 
 pub struct DiscoveryState {
@@ -20,18 +21,31 @@ pub struct DiscoveryState {
 pub fn start_discovery(app: AppHandle, transfer_port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let mdns = ServiceDaemon::new()?;
     let service_type = "_dropbridge._tcp.local.";
-    let devicename = whoami::devicename().unwrap_or_else(|_| "UnknownMac".to_string());
-    let my_name = format!("{}._dropbridge._tcp.local.", devicename);
+    let devicename = whoami::devicename().unwrap_or_else(|_| "Unknown".to_string());
+    
+    // Sanitize device name
+    let sanitized: String = devicename.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .take(63)
+        .collect();
+    let my_name = format!("{}.{}", sanitized, service_type);
     
     // Register our service
     let my_ip = local_ip_address::local_ip()?.to_string();
-    let username = whoami::username().unwrap_or_else(|_| "UnknownUser".to_string());
-    let properties = [("name", username)];
+    let username = whoami::username().unwrap_or_else(|_| "Unknown".to_string());
+    let device_type = if cfg!(target_os = "macos") { "mac" }
+        else if cfg!(target_os = "windows") { "windows" }
+        else { "linux" };
+
+    let properties = [
+        ("name", username),
+        ("device_type", device_type.to_string()),
+    ];
     
     let my_service = ServiceInfo::new(
         service_type,
         &my_name,
-        &format!("{}.local.", devicename),
+        &format!("{}.local.", sanitized),
         &my_ip,
         transfer_port,
         &properties[..],
@@ -56,6 +70,11 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16) -> Result<(), Box<dyn
                         Some(Some(val)) => String::from_utf8_lossy(val).to_string(),
                         _ => "Unknown".to_string(),
                     };
+
+                    let device_type = match info.get_property_val("device_type") {
+                        Some(Some(val)) => String::from_utf8_lossy(val).to_string(),
+                        _ => "unknown".to_string(),
+                    };
                     
                     let peer = Peer {
                         id: peer_id.clone(),
@@ -63,10 +82,19 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16) -> Result<(), Box<dyn
                         ip,
                         port: info.get_port(),
                         last_seen: chrono::Utc::now().timestamp(),
+                        device_type,
                     };
                     
-                    let mut peers = peers_clone.lock().unwrap();
-                    peers.insert(peer_id.clone(), peer.clone());
+                    {
+                        let mut peers = peers_clone.lock().unwrap();
+                        peers.insert(peer_id.clone(), peer.clone());
+                    }
+                    
+                    // Upsert to DB
+                    let db_state = app.state::<crate::DbState>();
+                    if let Ok(conn) = db_state.conn.lock() {
+                        let _ = crate::db::upsert_peer(&conn, &peer);
+                    }
                     
                     let _ = app.emit("peer_discovered", peer);
                 }

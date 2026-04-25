@@ -15,12 +15,14 @@
         "title": "DropBridge",
         "width": 960,
         "height": 680,
+        "minWidth": 800,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost"
     }
   },
   "bundle": {

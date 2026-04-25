@@ -6,6 +6,7 @@ export interface Peer {
   ip: string;
   port: number;
   last_seen: number;
+  device_type: string;
 }
 
 export interface Transfer {
@@ -14,9 +15,27 @@ export interface Transfer {
   fileSize: number;
   sender: string;
   progress: number;
-  status: 'pending' | 'streaming' | 'completed' | 'cancelled' | 'declined';
+  status: 'pending' | 'streaming' | 'completed' | 'cancelled' | 'declined' | 'failed';
+  speedBps?: number;
+  timestamp?: number;
 }
 
 export const peers = writable<Peer[]>([]);
 export const transfers = writable<Transfer[]>([]);
 export const pendingTransfer = writable<Transfer | null>(null);
+
+export interface Toast {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
+export const toasts = writable<Toast[]>([]);
+
+export function addToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+  const id = crypto.randomUUID();
+  toasts.update(t => [...t, { id, message, type }]);
+  setTimeout(() => {
+    toasts.update(t => t.filter(x => x.id !== id));
+  }, 3000);
+}

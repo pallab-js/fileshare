@@ -10,6 +10,9 @@ pub fn init_db(app: &AppHandle) -> Result<Connection, rusqlite::Error> {
     
     let conn = Connection::open(db_path)?;
     
+    // Enable WAL mode
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+    
     conn.execute(
         "CREATE TABLE IF NOT EXISTS peers (
             id TEXT PRIMARY KEY,
@@ -20,6 +23,23 @@ pub fn init_db(app: &AppHandle) -> Result<Connection, rusqlite::Error> {
         )",
         [],
     )?;
+
+    // Add device_type column to peers if it doesn't exist
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_device_type = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "device_type" {
+                has_device_type = true;
+                break;
+            }
+        }
+        if !has_device_type {
+            conn.execute("ALTER TABLE peers ADD COLUMN device_type TEXT NOT NULL DEFAULT 'unknown'", [])?;
+        }
+    }
     
     conn.execute(
         "CREATE TABLE IF NOT EXISTS transfers (
@@ -33,8 +53,15 @@ pub fn init_db(app: &AppHandle) -> Result<Connection, rusqlite::Error> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
+        [],
+    )?;
+
     // Migration: Add timestamp if it doesn't exist
-    // Wrapped in a scope so 'stmt' and 'rows' are dropped before returning 'conn'
     {
         let mut stmt = conn.prepare("PRAGMA table_info(transfers)")?;
         let mut rows = stmt.query([])?;
@@ -53,6 +80,18 @@ pub fn init_db(app: &AppHandle) -> Result<Connection, rusqlite::Error> {
     }
     
     Ok(conn)
+}
+
+pub fn upsert_peer(
+    conn: &Connection,
+    peer: &crate::mdns::Peer,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO peers (id, name, ip, port, last_seen, device_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![peer.id, peer.name, peer.ip, peer.port, peer.last_seen, peer.device_type],
+    )?;
+    Ok(())
 }
 
 pub fn log_transfer(

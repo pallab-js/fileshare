@@ -5,7 +5,9 @@
   import { Laptop, Send, History, Settings, Shield, File, Check, X } from 'lucide-svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import { peers, transfers, pendingTransfer, type Peer, type Transfer } from '$lib/stores';
+  import { peers, transfers, pendingTransfer, toasts, addToast, type Peer, type Transfer } from '$lib/stores';
+  import { getVersion } from '@tauri-apps/api/app';
+  import { formatSize } from '$lib/utils';
 
   let { children } = $props();
 
@@ -17,12 +19,13 @@
   ];
 
   let isAdmin = $state(true);
+  let version = $state('');
 
   onMount(() => {
-    // Initial peer discovery
+    getVersion().then(v => version = v);
+
     invoke<Peer[]>('discover_peers').then(p => peers.set(p));
 
-    // Listen for events
     const unlistenPeer = listen<Peer>('peer_discovered', (event) => {
       peers.update(list => {
         const index = list.findIndex(p => p.id === event.payload.id);
@@ -32,6 +35,10 @@
         }
         return [...list, event.payload];
       });
+    });
+
+    const unlistenPeerRemoved = listen<string>('peer_removed', (event) => {
+      peers.update(list => list.filter(p => p.id !== event.payload));
     });
 
     const unlistenRequest = listen<any>('transfer_requested', (event) => {
@@ -44,6 +51,7 @@
         status: 'pending'
       };
       pendingTransfer.set(transfer);
+      addToast(`Incoming transfer from ${transfer.sender}`, 'info');
     });
 
     const unlistenProgress = listen<any>('transfer_progress', (event) => {
@@ -52,6 +60,7 @@
         if (t) {
           t.progress = (event.payload.bytes_transferred / event.payload.total_bytes) * 100;
           t.status = 'streaming';
+          t.speedBps = event.payload.speedBps;
         }
         return [...list];
       });
@@ -63,6 +72,7 @@
         if (t) {
           t.progress = 100;
           t.status = 'completed';
+          addToast(`Transfer completed: ${t.fileName}`, 'success');
         }
         return [...list];
       });
@@ -73,17 +83,39 @@
         const t = list.find(x => x.id === event.payload);
         if (t) {
           t.status = 'declined';
+          addToast(`Transfer declined`, 'error');
         }
         return [...list];
       });
     });
 
+    const unlistenCancelled = listen<string>('transfer_cancelled', (event) => {
+      transfers.update(list => {
+        const t = list.find(x => x.id === event.payload);
+        if (t) {
+          t.status = 'cancelled';
+          addToast(`Transfer cancelled`, 'error');
+        }
+        return [...list];
+      });
+    });
+
+    const unlistenTimeout = listen<string>('transfer_timeout', (event) => {
+      if ($pendingTransfer?.id === event.payload) {
+        pendingTransfer.set(null);
+        addToast(`Transfer request timed out`, 'info');
+      }
+    });
+
     return () => {
       unlistenPeer.then(fn => fn());
+      unlistenPeerRemoved.then(fn => fn());
       unlistenRequest.then(fn => fn());
       unlistenProgress.then(fn => fn());
       unlistenCompleted.then(fn => fn());
       unlistenDeclined.then(fn => fn());
+      unlistenCancelled.then(fn => fn());
+      unlistenTimeout.then(fn => fn());
     };
   });
 
@@ -116,7 +148,7 @@
           href={item.path}
           class="flex items-center gap-3 px-3 py-2 rounded-[6px] transition-colors duration-200 group
             {$page.url.pathname === item.path 
-              ? 'bg-surface border-l-2 border-brand-translucent text-text-primary' 
+              ? 'bg-brand/10 text-brand border-l-2 border-brand rounded-[6px]' 
               : 'text-text-secondary hover:text-text-primary hover:bg-border-hover'}"
         >
           <item.icon size={18} />
@@ -139,11 +171,28 @@
         </a>
       </div>
     {/if}
+
+    <div class="p-4 border-t border-border flex items-center justify-between">
+      <span class="text-[10px] font-mono text-text-muted uppercase tracking-widest">Version {version}</span>
+      <div class="w-1.5 h-1.5 bg-brand rounded-full animate-pulse"></div>
+    </div>
   </aside>
 
   <!-- Main Content -->
   <main class="flex-1 overflow-y-auto relative">
     {@render children()}
+
+    <!-- Toasts -->
+    <div class="fixed bottom-6 right-6 z-[60] flex flex-col gap-3">
+      {#each $toasts as toast}
+        <div class="px-4 py-3 rounded-[6px] border bg-surface shadow-2xl animate-in slide-in-from-right-8 duration-300 flex items-center gap-3
+          {toast.type === 'success' ? 'border-brand/40 text-brand' : toast.type === 'error' ? 'border-danger/40 text-danger' : 'border-border-card text-text-primary'}">
+          {#if toast.type === 'success'}<Check size={16} />{/if}
+          {#if toast.type === 'error'}<X size={16} />{/if}
+          <span class="text-sm font-medium">{toast.message}</span>
+        </div>
+      {/each}
+    </div>
 
     <!-- Consent Modal -->
     {#if $pendingTransfer}
@@ -162,7 +211,7 @@
             <div class="bg-background border border-border-card rounded-2xl p-4 mb-8">
               <p class="text-sm font-medium text-text-primary truncate">{$pendingTransfer.fileName}</p>
               <p class="text-xs font-mono text-text-muted uppercase tracking-tighter">
-                {($pendingTransfer.fileSize / (1024 * 1024)).toFixed(2)} MB
+                {formatSize($pendingTransfer.fileSize)}
               </p>
             </div>
 

@@ -11,7 +11,7 @@ use tauri::Manager;
 use crate::mdns::{Peer, DiscoveryState};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
 pub struct DbState {
@@ -19,7 +19,8 @@ pub struct DbState {
 }
 
 pub struct TransferState {
-    pub pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pub pending: Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pub active: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
 }
 
 #[derive(Serialize)]
@@ -34,6 +35,15 @@ pub struct TransferHistory {
     pub timestamp: i64,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferProgressWithSpeed {
+    pub id: String,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    pub speed_bps: u64,
+}
+
 #[tauri::command]
 fn discover_peers(state: tauri::State<'_, DiscoveryState>) -> Vec<Peer> {
     let peers = state.peers.lock().unwrap();
@@ -46,20 +56,30 @@ fn send_file(
     file_path: String,
     recipient_ip: String,
     port: u16,
-) -> String {
+) -> Result<String, String> {
     transfer::send_file(app, PathBuf::from(file_path), recipient_ip, port)
 }
 
 #[tauri::command]
-fn respond_to_transfer(
+async fn respond_to_transfer(
     state: tauri::State<'_, TransferState>,
     id: String,
     accept: bool,
-) {
-    let mut pending = state.pending.lock().unwrap();
+) -> Result<(), String> {
+    let mut pending = state.pending.lock().await;
     if let Some(tx) = pending.remove(&id) {
         let _ = tx.send(accept);
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_transfer(state: tauri::State<'_, TransferState>, id: String) -> Result<(), String> {
+    let mut active = state.active.lock().await;
+    if let Some(tx) = active.remove(&id) {
+        let _ = tx.send(());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -89,20 +109,56 @@ fn get_history(state: tauri::State<'_, DbState>) -> Result<Vec<TransferHistory>,
 }
 
 #[tauri::command]
+fn clear_history(state: tauri::State<'_, DbState>) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    conn.execute("DELETE FROM transfers", []).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, DbState>) -> Result<HashMap<String, String>, String> {
+    let conn = state.conn.lock().unwrap();
+    let mut stmt = conn.prepare("SELECT key, value FROM settings").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }).map_err(|e| e.to_string())?;
+
+    let mut settings = HashMap::new();
+    for row in rows {
+        let (key, value) = row.map_err(|e| e.to_string())?;
+        settings.insert(key, value);
+    }
+    Ok(settings)
+}
+
+#[tauri::command]
+fn save_settings(state: tauri::State<'_, DbState>, settings: HashMap<String, String>) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    for (key, value) in settings {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        ).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn claim_admin() -> Result<(), String> {
-    // For MVP, just return success. 
-    // Real implementation would start a WS server and notify others via mDNS.
     Ok(())
 }
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(DiscoveryState {
             peers: Arc::new(Mutex::new(HashMap::new())),
         })
         .manage(TransferState {
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            active: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -125,7 +181,11 @@ fn main() {
             discover_peers, 
             send_file,
             respond_to_transfer,
+            cancel_transfer,
             get_history,
+            clear_history,
+            get_settings,
+            save_settings,
             claim_admin
         ])
         .run(tauri::generate_context!())

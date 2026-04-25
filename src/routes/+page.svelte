@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { Monitor, Smartphone, Laptop } from 'lucide-svelte';
+  import { Monitor, Smartphone, Laptop, Server } from 'lucide-svelte';
   import { peers } from '$lib/stores';
   import { goto } from '$app/navigation';
 
   function getIcon(type: string) {
-    switch (type) {
-      case 'laptop': return Laptop;
-      case 'mobile': return Smartphone;
-      default: return Monitor;
-    }
+    if (type === 'mac') return Laptop;
+    if (type === 'windows') return Monitor;
+    if (type === 'linux') return Server;
+    if (type === 'mobile') return Smartphone;
+    return Server;
   }
 
   function getInitials(name: string) {
@@ -16,8 +16,7 @@
   }
 
   function handleSend(peer: any) {
-    // In a real app, we might pass the peer info to the send page
-    goto('/send');
+    goto(`/send?peerId=${encodeURIComponent(peer.id)}`);
   }
 </script>
 
@@ -28,8 +27,10 @@
       <p class="text-text-secondary">Discovered devices on your local network.</p>
     </div>
     <div class="flex items-center gap-2 px-3 py-1 bg-brand-translucent rounded-full border border-brand/20">
-      <div class="w-2 h-2 bg-brand rounded-full animate-pulse"></div>
-      <span class="text-xs font-mono uppercase tracking-wider text-brand">Scanning...</span>
+      <div class="w-2 h-2 bg-brand rounded-full {$peers.length === 0 ? 'animate-pulse' : ''}"></div>
+      <span class="text-xs font-mono uppercase tracking-wider text-brand">
+        {$peers.length === 0 ? 'Scanning...' : `${$peers.length} device${$peers.length !== 1 ? 's' : ''} found`}
+      </span>
     </div>
   </div>
 
@@ -48,8 +49,8 @@
         
         <h3 class="text-lg font-medium text-text-primary mb-1 truncate">{peer.name}</h3>
         <p class="text-sm text-text-muted flex items-center gap-2">
-          <Laptop size={14} />
-          macOS • {peer.ip}
+          <svelte:component this={getIcon(peer.device_type)} size={14} />
+          {peer.device_type.toUpperCase()} • {peer.ip}
         </p>
 
         <button 
