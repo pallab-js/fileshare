@@ -1,14 +1,29 @@
 <script lang="ts">
-  import { ArrowUpRight, ArrowDownLeft, CheckCircle2, XCircle, Clock, Loader2, Trash2 } from 'lucide-svelte';
-  import { transfers, addToast } from '$lib/stores';
+  import { ArrowUpRight, ArrowDownLeft, CheckCircle2, XCircle, Clock, Loader2, Trash2, Filter, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { addToast } from '$lib/stores';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { formatSize, formatSpeed, formatETA } from '$lib/utils';
 
+  let historyItems = $state<any[]>([]);
+  let filterStatus = $state<string>('all');
+  let page = $state(0);
+  const PAGE_SIZE = 50;
+
+  let filteredItems = $derived(
+    historyItems
+      .filter(h => filterStatus === 'all' || h.status === filterStatus)
+      .slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  );
+
+  let totalPages = $derived(
+    Math.ceil(historyItems.filter(h => filterStatus === 'all' || h.status === filterStatus).length / PAGE_SIZE)
+  );
+
   async function loadHistory() {
     try {
-      const history = await invoke<any[]>('get_history');
-      const mapped = history.map(h => ({
+      const history = await invoke<any[]>('get_history', { limit: 1000, offset: 0 });
+      historyItems = history.map(h => ({
         id: h.id,
         fileName: h.fileName,
         fileSize: h.fileSize,
@@ -17,7 +32,6 @@
         status: h.status,
         timestamp: h.timestamp
       }));
-      transfers.set(mapped);
     } catch (e) {
       console.error("Failed to load history", e);
     }
@@ -27,7 +41,7 @@
     if (confirm('Are you sure you want to clear your transfer history?')) {
       try {
         await invoke('clear_history');
-        transfers.set([]);
+        historyItems = [];
         addToast('History cleared', 'success');
       } catch (e: any) {
         addToast(e.toString(), 'error');
@@ -95,6 +109,44 @@
     </div>
   </div>
 
+  <div class="mb-6 flex items-center justify-between">
+    <div class="flex gap-2">
+      {#each ['all', 'completed', 'failed', 'cancelled'] as status}
+        <button
+          onclick={() => { filterStatus = status; page = 0; }}
+          class="px-4 py-1.5 rounded-full text-xs font-mono uppercase tracking-widest border transition-colors
+            {filterStatus === status 
+              ? 'bg-brand-translucent border-brand/40 text-brand' 
+              : 'bg-surface border-border-card text-text-muted hover:text-text-primary hover:border-text-muted'}"
+        >
+          {status}
+        </button>
+      {/each}
+    </div>
+    
+    {#if totalPages > 1}
+      <div class="flex items-center gap-4 text-sm text-text-muted">
+        <span>Page {page + 1} of {totalPages}</span>
+        <div class="flex gap-1">
+          <button 
+            disabled={page === 0}
+            onclick={() => page--}
+            class="p-1 rounded-[6px] border border-border-card disabled:opacity-50 disabled:cursor-not-allowed hover:text-text-primary hover:border-text-muted transition-colors"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button 
+            disabled={page >= totalPages - 1}
+            onclick={() => page++}
+            class="p-1 rounded-[6px] border border-border-card disabled:opacity-50 disabled:cursor-not-allowed hover:text-text-primary hover:border-text-muted transition-colors"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+    {/if}
+  </div>
+
   <div class="bg-surface border border-border-card rounded-2xl overflow-hidden shadow-sm">
     <table class="w-full text-left border-collapse">
       <thead>
@@ -107,7 +159,8 @@
         </tr>
       </thead>
       <tbody class="divide-y divide-border-card/50">
-        {#each $transfers as t}
+        {#each filteredItems as t}
+          {@const StatusIcon = getStatusIcon(t.status)}
           <tr class="hover:bg-background/30 transition-colors group">
             <td class="px-6 py-4 whitespace-nowrap">
               <span class="text-xs font-mono text-text-muted uppercase tracking-tighter">
@@ -127,7 +180,7 @@
             </td>
             <td class="px-6 py-4">
               <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-mono uppercase tracking-widest {getStatusClass(t.status)}">
-                <svelte:component this={getStatusIcon(t.status)} size={10} class={t.status === 'streaming' ? 'animate-spin' : ''} />
+                <StatusIcon size={10} class={t.status === 'streaming' ? 'animate-spin' : ''} />
                 {t.status}
               </div>
             </td>

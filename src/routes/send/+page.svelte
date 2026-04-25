@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { File, X, UploadCloud, Laptop, Search } from 'lucide-svelte';
+  import { File, X, UploadCloud, Laptop } from 'lucide-svelte';
   import { peers, transfers, addToast } from '$lib/stores';
   import { invoke } from '@tauri-apps/api/core';
   import { page } from '$app/stores';
@@ -21,12 +21,14 @@
 
   async function browseFiles() {
     const selected = await open({ multiple: true, directory: false });
-    if (selected) {
-      const paths = Array.isArray(selected) ? selected : [selected];
-      for (const p of paths) {
-        // In a real app we'd get file metadata from Rust if needed
-        // but for now we just push the path
-        files.push({ name: p.split('/').pop() || p, size: 0, path: p });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    for (const p of paths) {
+      try {
+        const [name, size] = await invoke<[string, number]>('get_file_meta', { path: p });
+        files = [...files, { name, size, path: p }];
+      } catch (e: any) {
+        addToast(e.toString(), 'error');
       }
     }
   }
@@ -34,15 +36,15 @@
   function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    if (e.dataTransfer?.files) {
-      Array.from(e.dataTransfer.files).forEach(f => {
-        files.push({ 
-          name: f.name, 
-          size: f.size,
-          path: (f as any).path || f.name
-        });
-      });
-    }
+    const droppedFiles = Array.from(e.dataTransfer?.files ?? []);
+    files = [
+      ...files,
+      ...droppedFiles.map(f => ({
+        name: f.name,
+        size: f.size,
+        path: (f as any).path ?? f.name
+      }))
+    ];
   }
 
   async function sendFiles() {
@@ -126,15 +128,16 @@
     </div>
   </div>
 
-  <!-- Queue -->
-  {#if files.length > 0}
-    <div class="space-y-3 mb-10">
-      <label class="block text-xs font-mono uppercase tracking-widest text-text-muted mb-2" for="queue">Queue ({files.length})</label>
+  <!-- Queue / Active Transfers -->
+  <div class="space-y-3 mb-10">
+    {#if files.length > 0 || $transfers.some(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending'))}
+      <label class="block text-xs font-mono uppercase tracking-widest text-text-muted mb-2" for="queue">Queue</label>
+      
       {#each files as file, i}
         <div class="flex items-center justify-between p-4 bg-surface border border-border-card rounded-[6px] group transition-all hover:border-text-muted">
           <div class="flex items-center gap-4">
             <div class="w-10 h-10 bg-background border border-border-card rounded-[6px] flex items-center justify-center">
-              <File size={20} class="text-brand" />
+              <File size={20} class="text-text-muted" />
             </div>
             <div>
               <p class="text-sm font-medium text-text-primary truncate max-w-[300px]">{file.name}</p>
@@ -149,18 +152,43 @@
           </button>
         </div>
       {/each}
-    </div>
 
-    <div class="flex justify-end">
-      <button 
-        onclick={sendFiles}
-        disabled={!selectedPeerId}
-        class="px-8 py-3 bg-brand text-surface font-medium rounded-full transition-all hover:bg-brand-hover hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-brand/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
-      >
-        Send to {$peers.find(r => r.id === selectedPeerId)?.name || 'Device'}
-      </button>
-    </div>
-  {/if}
+      {#each $transfers.filter(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending')) as t}
+        <div class="flex items-center justify-between p-4 bg-surface border border-brand/40 rounded-[6px] group transition-all">
+          <div class="flex items-center gap-4">
+            <div class="w-10 h-10 bg-background border border-brand/20 rounded-[6px] flex items-center justify-center">
+              <File size={20} class="text-brand" />
+            </div>
+            <div>
+              <p class="text-sm font-medium text-text-primary truncate max-w-[300px]">{t.fileName}</p>
+              {#if t.status === 'streaming'}
+                <p class="text-xs font-mono text-brand uppercase">
+                  {formatSpeed(t.speedBps ?? 0)} · ETA {formatETA(t.fileSize * (1 - t.progress/100), t.speedBps ?? 0)}
+                </p>
+              {:else}
+                <p class="text-xs font-mono text-text-muted uppercase">Pending...</p>
+              {/if}
+            </div>
+          </div>
+          <div class="w-24">
+             <div class="h-1.5 w-full bg-background rounded-full overflow-hidden">
+               <div class="h-full bg-brand transition-all duration-300" style="width: {t.progress}%"></div>
+             </div>
+          </div>
+        </div>
+      {/each}
+    {/if}
+  </div>
+
+  <div class="flex justify-end">
+    <button 
+      onclick={sendFiles}
+      disabled={!selectedPeerId || files.length === 0}
+      class="px-8 py-3 bg-brand text-surface font-medium rounded-full transition-all hover:bg-brand-hover hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-brand/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
+    >
+      Send to {$peers.find(r => r.id === selectedPeerId)?.name || 'Device'}
+    </button>
+  </div>
 </div>
 
 <style>

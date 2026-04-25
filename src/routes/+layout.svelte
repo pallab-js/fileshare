@@ -2,12 +2,13 @@
   import '../app.css';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { Laptop, Send, History, Settings, Shield, File, Check, X } from 'lucide-svelte';
+  import { Laptop, Send, History, Settings, File, Check, X } from 'lucide-svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import { peers, transfers, pendingTransfer, toasts, addToast, type Peer, type Transfer } from '$lib/stores';
+  import { sendNotification } from '@tauri-apps/plugin-notification';
+  import { peers, transfers, pendingTransfer, toasts, addToast, type Peer, type Transfer, type TransferRequestPayload, type TransferProgressPayload } from '$lib/stores';
   import { getVersion } from '@tauri-apps/api/app';
-  import { formatSize } from '$lib/utils';
+  import { formatSize, formatSpeed } from '$lib/utils';
 
   let { children } = $props();
 
@@ -18,11 +19,15 @@
     { name: 'Settings', icon: Settings, path: '/settings' },
   ];
 
-  let isAdmin = $state(true);
   let version = $state('');
+  let notificationsEnabled = $state(true);
 
   onMount(() => {
     getVersion().then(v => version = v);
+
+    invoke<Record<string, string>>('get_settings').then(s => {
+      if (s.notifications) notificationsEnabled = s.notifications === 'true';
+    }).catch(console.error);
 
     invoke<Peer[]>('discover_peers').then(p => peers.set(p));
 
@@ -41,7 +46,7 @@
       peers.update(list => list.filter(p => p.id !== event.payload));
     });
 
-    const unlistenRequest = listen<any>('transfer_requested', (event) => {
+    const unlistenRequest = listen<TransferRequestPayload>('transfer_requested', (event) => {
       const transfer: Transfer = {
         id: event.payload.id,
         fileName: event.payload.file_name,
@@ -52,15 +57,22 @@
       };
       pendingTransfer.set(transfer);
       addToast(`Incoming transfer from ${transfer.sender}`, 'info');
+      if (notificationsEnabled) {
+        sendNotification({
+          title: 'DropBridge — Incoming File',
+          body: `${transfer.sender} wants to send ${transfer.fileName}`
+        });
+      }
     });
 
-    const unlistenProgress = listen<any>('transfer_progress', (event) => {
+    const unlistenProgress = listen<TransferProgressPayload>('transfer_progress', (event) => {
       transfers.update(list => {
         const t = list.find(x => x.id === event.payload.id);
         if (t) {
-          t.progress = (event.payload.bytes_transferred / event.payload.total_bytes) * 100;
+          const prog = event.payload;
+          t.progress = (prog.bytesTransferred / prog.totalBytes) * 100;
           t.status = 'streaming';
-          t.speedBps = event.payload.speedBps;
+          t.speedBps = prog.speedBps;
         }
         return [...list];
       });
@@ -73,6 +85,12 @@
           t.progress = 100;
           t.status = 'completed';
           addToast(`Transfer completed: ${t.fileName}`, 'success');
+          if (notificationsEnabled) {
+            sendNotification({
+              title: 'DropBridge — Transfer Complete',
+              body: `${t.fileName} was successfully transferred.`
+            });
+          }
         }
         return [...list];
       });
@@ -100,6 +118,17 @@
       });
     });
 
+    const unlistenFailed = listen<{id: string, reason: string}>('transfer_failed', (event) => {
+      transfers.update(list => {
+        const t = list.find(x => x.id === event.payload.id);
+        if (t) {
+          t.status = 'failed';
+          addToast(`Transfer failed: ${event.payload.reason}`, 'error');
+        }
+        return [...list];
+      });
+    });
+
     const unlistenTimeout = listen<string>('transfer_timeout', (event) => {
       if ($pendingTransfer?.id === event.payload) {
         pendingTransfer.set(null);
@@ -115,6 +144,7 @@
       unlistenCompleted.then(fn => fn());
       unlistenDeclined.then(fn => fn());
       unlistenCancelled.then(fn => fn());
+      unlistenFailed.then(fn => fn());
       unlistenTimeout.then(fn => fn());
     };
   });
@@ -157,21 +187,6 @@
       {/each}
     </nav>
 
-    {#if isAdmin}
-      <div class="px-3 py-4 border-t border-border">
-        <a
-          href="/admin"
-          class="flex items-center gap-3 px-3 py-2 text-text-secondary hover:text-text-primary transition-colors group"
-        >
-          <div class="relative">
-            <Shield size={18} />
-            <div class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-brand rounded-full border-2 border-surface"></div>
-          </div>
-          <span class="text-sm font-medium">Admin Dashboard</span>
-        </a>
-      </div>
-    {/if}
-
     <div class="p-4 border-t border-border flex items-center justify-between">
       <span class="text-[10px] font-mono text-text-muted uppercase tracking-widest">Version {version}</span>
       <div class="w-1.5 h-1.5 bg-brand rounded-full animate-pulse"></div>
@@ -182,8 +197,23 @@
   <main class="flex-1 overflow-y-auto relative">
     {@render children()}
 
+    <!-- Active Transfers Tray -->
+    {#if $transfers.some(t => t.status === 'streaming')}
+      <div class="fixed bottom-0 left-[240px] right-0 bg-surface border-t border-border px-6 py-3 flex items-center justify-between z-40 shadow-lg">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 bg-brand rounded-full animate-pulse"></div>
+          <span class="text-sm font-medium">
+            {$transfers.filter(t => t.status === 'streaming').length} transfer(s) active
+          </span>
+        </div>
+        <span class="text-xs font-mono text-brand font-medium tracking-wide">
+          {formatSpeed($transfers.filter(t => t.status === 'streaming').reduce((acc, t) => acc + (t.speedBps ?? 0), 0))}
+        </span>
+      </div>
+    {/if}
+
     <!-- Toasts -->
-    <div class="fixed bottom-6 right-6 z-[60] flex flex-col gap-3">
+    <div class="fixed bottom-16 right-6 z-[60] flex flex-col gap-3">
       {#each $toasts as toast}
         <div class="px-4 py-3 rounded-[6px] border bg-surface shadow-2xl animate-in slide-in-from-right-8 duration-300 flex items-center gap-3
           {toast.type === 'success' ? 'border-brand/40 text-brand' : toast.type === 'error' ? 'border-danger/40 text-danger' : 'border-border-card text-text-primary'}">

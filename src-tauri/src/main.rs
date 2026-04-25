@@ -51,13 +51,13 @@ fn discover_peers(state: tauri::State<'_, DiscoveryState>) -> Vec<Peer> {
 }
 
 #[tauri::command]
-fn send_file(
+async fn send_file(
     app: tauri::AppHandle,
     file_path: String,
     recipient_ip: String,
     port: u16,
 ) -> Result<String, String> {
-    transfer::send_file(app, PathBuf::from(file_path), recipient_ip, port)
+    transfer::send_file(app, PathBuf::from(file_path), recipient_ip, port).await
 }
 
 #[tauri::command]
@@ -83,12 +83,14 @@ async fn cancel_transfer(state: tauri::State<'_, TransferState>, id: String) -> 
 }
 
 #[tauri::command]
-fn get_history(state: tauri::State<'_, DbState>) -> Result<Vec<TransferHistory>, String> {
+fn get_history(state: tauri::State<'_, DbState>, limit: Option<i64>, offset: Option<i64>) -> Result<Vec<TransferHistory>, String> {
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
     let conn = state.conn.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT id, direction, peer_name, file_name, file_size, status, timestamp FROM transfers ORDER BY timestamp DESC")
+    let mut stmt = conn.prepare("SELECT id, direction, peer_name, file_name, file_size, status, timestamp FROM transfers ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2")
         .map_err(|e| e.to_string())?;
     
-    let history_iter = stmt.query_map([], |row| {
+    let history_iter = stmt.query_map(params![limit, offset], |row| {
         Ok(TransferHistory {
             id: row.get(0)?,
             direction: row.get(1)?,
@@ -148,6 +150,17 @@ fn claim_admin() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_file_meta(path: String) -> Result<(String, u64), String> {
+    let p = std::path::Path::new(&path);
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    let name = p.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid filename")?
+        .to_string();
+    Ok((name, meta.len()))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -170,9 +183,21 @@ fn main() {
             });
 
             // Start networking in async runtime
+            let db_conn = app.state::<DbState>().conn.clone();
             tauri::async_runtime::spawn(async move {
                 let port = transfer::start_listener(handle.clone()).await.expect("failed to start transfer listener");
-                mdns::start_discovery(handle, port).expect("failed to start mDNS discovery");
+                
+                let display_name = {
+                    if let Ok(conn) = db_conn.lock() {
+                        conn.query_row(
+                            "SELECT value FROM settings WHERE key = 'displayName'",
+                            [],
+                            |r| r.get::<_, String>(0)
+                        ).ok()
+                    } else { None }
+                }.unwrap_or_else(|| whoami::username().unwrap_or_else(|_| "Unknown".to_string()));
+
+                mdns::start_discovery(handle, port, display_name).expect("failed to start mDNS discovery");
             });
 
             Ok(())
@@ -186,7 +211,8 @@ fn main() {
             clear_history,
             get_settings,
             save_settings,
-            claim_admin
+            claim_admin,
+            get_file_meta
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

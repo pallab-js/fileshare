@@ -140,27 +140,19 @@
       <h2 class="text-xl font-medium leading-none mb-4">Audit Log</h2>
       <div class="bg-surface border border-border-card rounded-2xl p-6">
         <div class="space-y-4">
-          <div class="flex gap-3">
-            <div class="mt-1 w-1.5 h-1.5 bg-brand rounded-full"></div>
-            <div>
-              <p class="text-xs text-text-primary">Admin session initialized</p>
-              <p class="text-[10px] text-text-muted font-mono uppercase mt-0.5">Just now</p>
+          {#each $transfers.slice(0, 10) as log}
+            <div class="flex gap-3">
+              <div class="mt-1 w-1.5 h-1.5 rounded-full {log.status === 'failed' || log.status === 'cancelled' || log.status === 'declined' ? 'bg-danger' : 'bg-brand'}"></div>
+              <div>
+                <p class="text-xs text-text-primary">{log.fileName} - {log.status}</p>
+                <p class="text-[10px] text-text-muted font-mono uppercase mt-0.5">
+                  {log.sender}
+                </p>
+              </div>
             </div>
-          </div>
-          <div class="flex gap-3">
-            <div class="mt-1 w-1.5 h-1.5 bg-brand rounded-full"></div>
-            <div>
-              <p class="text-xs text-text-primary">mDNS browsing active</p>
-              <p class="text-[10px] text-text-muted font-mono uppercase mt-0.5">2m ago</p>
-            </div>
-          </div>
-          <div class="flex gap-3">
-            <div class="mt-1 w-1.5 h-1.5 bg-brand-translucent rounded-full"></div>
-            <div>
-              <p class="text-xs text-text-muted italic">Polling network state...</p>
-              <p class="text-[10px] text-text-muted font-mono uppercase mt-0.5">Active</p>
-            </div>
-          </div>
+          {:else}
+            <p class="text-xs text-text-muted italic">No recent activity.</p>
+          {/each}
         </div>
       </div>
     </div>

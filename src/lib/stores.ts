@@ -20,6 +20,20 @@ export interface Transfer {
   timestamp?: number;
 }
 
+export interface TransferRequestPayload {
+  id: string;
+  file_name: string;
+  file_size: number;
+  sender: string;
+}
+
+export interface TransferProgressPayload {
+  id: string;
+  bytesTransferred: number;
+  totalBytes: number;
+  speedBps: number;
+}
+
 export const peers = writable<Peer[]>([]);
 export const transfers = writable<Transfer[]>([]);
 export const pendingTransfer = writable<Transfer | null>(null);
