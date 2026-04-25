@@ -1,7 +1,7 @@
 # DropBridge
 
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri&logoColor=white)](https://tauri.app/)
-[![Svelte](https://img.shields.io/badge/Svelte-5.0-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
+[![Svelte](https://img.svelte.io/badge/Svelte-5.0-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.75+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3ecf8e.svg)](https://opensource.org/licenses/MIT)
 
@@ -11,26 +11,28 @@
 
 ## ✨ Core Features
 
-- **🚀 High-Performance Streaming**: Leverages a custom length-prefixed TCP framing protocol with 1MB optimized buffers for maximum throughput on Gigabit networks.
-- **🔍 Zero-Config Discovery**: Automatic peer discovery via mDNS (Bonjour/Avahi) with support for custom display names and device type identification.
+- **🚀 High-Performance Streaming**: Custom length-prefixed TCP framing protocol with 1MB optimized buffers for maximum throughput on Gigabit networks.
+- **🔍 Hybrid Discovery**: 
+  - **Zero-Config**: Automatic peer discovery via mDNS (Bonjour/Avahi).
+  - **Direct Connect**: Manual IP/Port fallback for environments where mDNS is blocked by AP Isolation.
 - **📊 Real-Time Analytics**: Precise speed tracking using a rolling 3-second sampler, live ETA calculations, and aggregate bandwidth monitoring.
 - **🛡️ Security Hardened**: 
-  - **Filename Sanitization**: Protection against path traversal attacks.
+  - **Robust Sanitization**: Strips Windows-forbidden characters, control characters, and null bytes to prevent path traversal and filesystem errors.
+  - **Per-IP Throttling**: Limits concurrent connections to 3 per IP address to prevent local resource exhaustion and DoS.
   - **Collision Prevention**: Automatic unique path resolution (e.g., `file (1).png`).
-  - **Rate Limiting**: Concurrent connection throttling via semaphores to prevent socket exhaustion.
-  - **Strict CSP**: Comprehensive Content Security Policy for the Svelte frontend.
+  - **Graceful Shutdown**: Intercepts OS signals to cleanly unregister services, preventing "ghost" mDNS records.
 - **📜 Smart History**: Filterable, paginated transfer logs stored in a high-concurrency SQLite database (WAL mode).
 - **⚙️ Desktop Native**:
   - Native file/directory pickers.
   - System-level notifications for transfer requests and completion.
-  - Automatic cleanup of stale peer records.
+  - Automatic cleanup of stale peer records older than 24 hours.
 
 ## 🚀 Tech Stack
 
 - **Frontend**: [Svelte 5](https://svelte.dev/) (Runes), TypeScript, [Tailwind CSS](https://tailwindcss.com/)
 - **Backend**: [Rust](https://www.rust-lang.org/), [Tauri 2.0](https://tauri.app/)
 - **Async Runtime**: [Tokio](https://tokio.rs/)
-- **Database**: SQLite via [rusqlite](https://github.com/rusqlite/rusqlite)
+- **Database**: SQLite via [rusqlite](https://github.com/rusqlite/rusqlite) (Async-wrapped with `spawn_blocking`)
 - **Networking**: [mdns-sd](https://github.com/pro_logic/mdns-sd) for discovery
 
 ## 🛠️ Getting Started
@@ -71,7 +73,7 @@ pnpm tauri build
 DropBridge is built on the principle of **Network Sovereignty**:
 - **Metadata Privacy**: Peer discovery is limited to your local network. No external "handshake" servers are used.
 - **End-to-End Local**: File data flows directly from the sender's memory/disk to the receiver's.
-- **Non-Blocking Safety**: All database operations are offloaded to background threads to ensure UI responsiveness even during heavy I/O.
+- **Non-Blocking Safety**: All database and I/O operations are offloaded to background threads to ensure UI responsiveness even during heavy transfers.
 
 ## 🤝 Contributing
 
