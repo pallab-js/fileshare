@@ -2,7 +2,7 @@
   import { User, Bell, Shield, FolderOpen, Save, Check } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { addToast } from '$lib/stores';
+  import { appState } from '$lib/stores.svelte';
 
   let settings = $state({
     displayName: '',
@@ -38,9 +38,9 @@
         notifications: settings.notifications.toString()
       };
       await invoke('save_settings', { settings: toSave });
-      addToast('Settings saved successfully', 'success');
+      appState.addToast('Settings saved successfully', 'success');
     } catch (e: any) {
-      addToast(e.toString(), 'error');
+      appState.addToast(e.toString(), 'error');
     } finally {
       isSaving = false;
     }

@@ -6,7 +6,8 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { sendNotification } from '@tauri-apps/plugin-notification';
-  import { peers, transfers, pendingTransfer, toasts, addToast, type Peer, type Transfer, type TransferRequestPayload, type TransferProgressPayload } from '$lib/stores';
+  import { appState } from '$lib/stores.svelte';
+  import { type Peer, type Transfer, type TransferRequestPayload, type TransferProgressPayload } from '$lib/types';
   import { getVersion } from '@tauri-apps/api/app';
   import { formatSize, formatSpeed } from '$lib/utils';
 
@@ -29,21 +30,14 @@
       if (s.notifications) notificationsEnabled = s.notifications === 'true';
     }).catch(console.error);
 
-    invoke<Peer[]>('discover_peers').then(p => peers.set(p));
+    invoke<Peer[]>('discover_peers').then(p => appState.setPeers(p));
 
     const unlistenPeer = listen<Peer>('peer_discovered', (event) => {
-      peers.update(list => {
-        const index = list.findIndex(p => p.id === event.payload.id);
-        if (index > -1) {
-          list[index] = event.payload;
-          return [...list];
-        }
-        return [...list, event.payload];
-      });
+      appState.updatePeer(event.payload);
     });
 
     const unlistenPeerRemoved = listen<string>('peer_removed', (event) => {
-      peers.update(list => list.filter(p => p.id !== event.payload));
+      appState.removePeer(event.payload);
     });
 
     const unlistenRequest = listen<TransferRequestPayload>('transfer_requested', (event) => {
@@ -55,8 +49,8 @@
         progress: 0,
         status: 'pending'
       };
-      pendingTransfer.set(transfer);
-      addToast(`Incoming transfer from ${transfer.sender}`, 'info');
+      appState.setPending(transfer);
+      appState.addToast(`Incoming transfer from ${transfer.sender}`, 'info');
       if (notificationsEnabled) {
         sendNotification({
           title: 'DropBridge — Incoming File',
@@ -66,73 +60,49 @@
     });
 
     const unlistenProgress = listen<TransferProgressPayload>('transfer_progress', (event) => {
-      transfers.update(list => {
-        const t = list.find(x => x.id === event.payload.id);
-        if (t) {
-          const prog = event.payload;
-          t.progress = (prog.bytesTransferred / prog.totalBytes) * 100;
-          t.status = 'streaming';
-          t.speedBps = prog.speedBps;
-        }
-        return [...list];
+      appState.updateTransfer(event.payload.id, {
+        progress: (event.payload.bytesTransferred / event.payload.totalBytes) * 100,
+        status: 'streaming',
+        speedBps: event.payload.speedBps
       });
     });
 
     const unlistenCompleted = listen<string>('transfer_completed', (event) => {
-      transfers.update(list => {
-        const t = list.find(x => x.id === event.payload);
-        if (t) {
-          t.progress = 100;
-          t.status = 'completed';
-          addToast(`Transfer completed: ${t.fileName}`, 'success');
-          if (notificationsEnabled) {
-            sendNotification({
-              title: 'DropBridge — Transfer Complete',
-              body: `${t.fileName} was successfully transferred.`
-            });
-          }
+      const t = appState.transfers.find(x => x.id === event.payload);
+      if (t) {
+        appState.updateTransfer(event.payload, {
+          progress: 100,
+          status: 'completed'
+        });
+        appState.addToast(`Transfer completed: ${t.fileName}`, 'success');
+        if (notificationsEnabled) {
+          sendNotification({
+            title: 'DropBridge — Transfer Complete',
+            body: `${t.fileName} was successfully transferred.`
+          });
         }
-        return [...list];
-      });
+      }
     });
 
     const unlistenDeclined = listen<string>('transfer_declined', (event) => {
-      transfers.update(list => {
-        const t = list.find(x => x.id === event.payload);
-        if (t) {
-          t.status = 'declined';
-          addToast(`Transfer declined`, 'error');
-        }
-        return [...list];
-      });
+      appState.updateTransfer(event.payload, { status: 'declined' });
+      appState.addToast(`Transfer declined`, 'error');
     });
 
     const unlistenCancelled = listen<string>('transfer_cancelled', (event) => {
-      transfers.update(list => {
-        const t = list.find(x => x.id === event.payload);
-        if (t) {
-          t.status = 'cancelled';
-          addToast(`Transfer cancelled`, 'error');
-        }
-        return [...list];
-      });
+      appState.updateTransfer(event.payload, { status: 'cancelled' });
+      appState.addToast(`Transfer cancelled`, 'error');
     });
 
     const unlistenFailed = listen<{id: string, reason: string}>('transfer_failed', (event) => {
-      transfers.update(list => {
-        const t = list.find(x => x.id === event.payload.id);
-        if (t) {
-          t.status = 'failed';
-          addToast(`Transfer failed: ${event.payload.reason}`, 'error');
-        }
-        return [...list];
-      });
+      appState.updateTransfer(event.payload.id, { status: 'failed' });
+      appState.addToast(`Transfer failed: ${event.payload.reason}`, 'error');
     });
 
     const unlistenTimeout = listen<string>('transfer_timeout', (event) => {
-      if ($pendingTransfer?.id === event.payload) {
-        pendingTransfer.set(null);
-        addToast(`Transfer request timed out`, 'info');
+      if (appState.pendingTransfer?.id === event.payload) {
+        appState.setPending(null);
+        appState.addToast(`Transfer request timed out`, 'info');
       }
     });
 
@@ -150,14 +120,14 @@
   });
 
   async function handleResponse(accept: boolean) {
-    if ($pendingTransfer) {
-      const t = $pendingTransfer;
+    if (appState.pendingTransfer) {
+      const t = { ...appState.pendingTransfer };
       if (accept) {
         t.status = 'streaming';
-        transfers.update(list => [t, ...list]);
+        appState.addTransfer(t);
       }
       await invoke('respond_to_transfer', { id: t.id, accept });
-      pendingTransfer.set(null);
+      appState.setPending(null);
     }
   }
 </script>
@@ -198,23 +168,23 @@
     {@render children()}
 
     <!-- Active Transfers Tray -->
-    {#if $transfers.some(t => t.status === 'streaming')}
+    {#if appState.transfers.some(t => t.status === 'streaming')}
       <div class="fixed bottom-0 left-[240px] right-0 bg-surface border-t border-border px-6 py-3 flex items-center justify-between z-40 shadow-lg">
         <div class="flex items-center gap-3">
           <div class="w-2 h-2 bg-brand rounded-full animate-pulse"></div>
           <span class="text-sm font-medium">
-            {$transfers.filter(t => t.status === 'streaming').length} transfer(s) active
+            {appState.transfers.filter(t => t.status === 'streaming').length} transfer(s) active
           </span>
         </div>
         <span class="text-xs font-mono text-brand font-medium tracking-wide">
-          {formatSpeed($transfers.filter(t => t.status === 'streaming').reduce((acc, t) => acc + (t.speedBps ?? 0), 0))}
+          {formatSpeed(appState.transfers.filter(t => t.status === 'streaming').reduce((acc, t) => acc + (t.speedBps ?? 0), 0))}
         </span>
       </div>
     {/if}
 
     <!-- Toasts -->
     <div class="fixed bottom-16 right-6 z-[60] flex flex-col gap-3">
-      {#each $toasts as toast}
+      {#each appState.toasts as toast}
         <div class="px-4 py-3 rounded-[6px] border bg-surface shadow-2xl animate-in slide-in-from-right-8 duration-300 flex items-center gap-3
           {toast.type === 'success' ? 'border-brand/40 text-brand' : toast.type === 'error' ? 'border-danger/40 text-danger' : 'border-border-card text-text-primary'}">
           {#if toast.type === 'success'}<Check size={16} />{/if}
@@ -225,7 +195,7 @@
     </div>
 
     <!-- Consent Modal -->
-    {#if $pendingTransfer}
+    {#if appState.pendingTransfer}
       <div class="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
         <div class="bg-surface border border-border-card rounded-[32px] w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
           <div class="p-8">
@@ -235,13 +205,13 @@
             
             <h2 class="text-2xl font-medium leading-none text-center mb-2">Transfer Request</h2>
             <p class="text-text-secondary text-center mb-8">
-              <span class="text-text-primary font-medium">{$pendingTransfer.sender}</span> wants to send you a file.
+              <span class="text-text-primary font-medium">{appState.pendingTransfer.sender}</span> wants to send you a file.
             </p>
 
             <div class="bg-background border border-border-card rounded-2xl p-4 mb-8">
-              <p class="text-sm font-medium text-text-primary truncate">{$pendingTransfer.fileName}</p>
+              <p class="text-sm font-medium text-text-primary truncate">{appState.pendingTransfer.fileName}</p>
               <p class="text-xs font-mono text-text-muted uppercase tracking-tighter">
-                {formatSize($pendingTransfer.fileSize)}
+                {formatSize(appState.pendingTransfer.fileSize)}
               </p>
             </div>
 

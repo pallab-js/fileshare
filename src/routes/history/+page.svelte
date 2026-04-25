@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ArrowUpRight, ArrowDownLeft, CheckCircle2, XCircle, Clock, Loader2, Trash2, Filter, ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { addToast } from '$lib/stores';
+  import { appState } from '$lib/stores.svelte';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { formatSize, formatSpeed, formatETA } from '$lib/utils';
@@ -17,7 +17,7 @@
   );
 
   let totalPages = $derived(
-    Math.ceil(historyItems.filter(h => filterStatus === 'all' || h.status === filterStatus).length / PAGE_SIZE)
+    Math.ceil(historyItems.filter(h => filterStatus === 'all' || h.status === filterStatus).length / PAGE_SIZE) || 1
   );
 
   async function loadHistory() {
@@ -42,9 +42,9 @@
       try {
         await invoke('clear_history');
         historyItems = [];
-        addToast('History cleared', 'success');
+        appState.addToast('History cleared', 'success');
       } catch (e: any) {
-        addToast(e.toString(), 'error');
+        appState.addToast(e.toString(), 'error');
       }
     }
   }

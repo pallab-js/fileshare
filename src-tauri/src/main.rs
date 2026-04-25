@@ -7,7 +7,7 @@ mod db;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use crate::mdns::{Peer, DiscoveryState};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
@@ -83,71 +83,117 @@ async fn cancel_transfer(state: tauri::State<'_, TransferState>, id: String) -> 
 }
 
 #[tauri::command]
-fn get_history(state: tauri::State<'_, DbState>, limit: Option<i64>, offset: Option<i64>) -> Result<Vec<TransferHistory>, String> {
+async fn get_history(state: tauri::State<'_, DbState>, limit: Option<i64>, offset: Option<i64>) -> Result<Vec<TransferHistory>, String> {
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
-    let conn = state.conn.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT id, direction, peer_name, file_name, file_size, status, timestamp FROM transfers ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2")
-        .map_err(|e| e.to_string())?;
+    let conn = state.conn.clone();
     
-    let history_iter = stmt.query_map(params![limit, offset], |row| {
-        Ok(TransferHistory {
-            id: row.get(0)?,
-            direction: row.get(1)?,
-            peer_name: row.get(2)?,
-            file_name: row.get(3)?,
-            file_size: row.get(4)?,
-            status: row.get(5)?,
-            timestamp: row.get(6)?,
-        })
-    }).map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let conn = conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, direction, peer_name, file_name, file_size, status, timestamp FROM transfers ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2")
+            .map_err(|e| e.to_string())?;
+        
+        let history_iter = stmt.query_map(params![limit, offset], |row| {
+            Ok(TransferHistory {
+                id: row.get(0)?,
+                direction: row.get(1)?,
+                peer_name: row.get(2)?,
+                file_name: row.get(3)?,
+                file_size: row.get(4)?,
+                status: row.get(5)?,
+                timestamp: row.get(6)?,
+            })
+        }).map_err(|e| e.to_string())?;
 
-    let mut history = Vec::new();
-    for item in history_iter {
-        history.push(item.map_err(|e| e.to_string())?);
+        let mut history = Vec::new();
+        for item in history_iter {
+            history.push(item.map_err(|e| e.to_string())?);
+        }
+        
+        Ok(history)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn clear_history(state: tauri::State<'_, DbState>) -> Result<(), String> {
+    let conn = state.conn.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conn.lock().unwrap();
+        conn.execute("DELETE FROM transfers", []).map_err(|e| e.to_string())?;
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_settings(state: tauri::State<'_, DbState>) -> Result<HashMap<String, String>, String> {
+    let conn = state.conn.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM settings").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).map_err(|e| e.to_string())?;
+
+        let mut settings = HashMap::new();
+        for row in rows {
+            let (key, value) = row.map_err(|e| e.to_string())?;
+            settings.insert(key, value);
+        }
+        Ok(settings)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_settings(state: tauri::State<'_, DbState>, settings: HashMap<String, String>) -> Result<(), String> {
+    let conn = state.conn.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conn.lock().unwrap();
+        for (key, value) in settings {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            ).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn direct_connect(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DiscoveryState>,
+    ip: String,
+    port: u16,
+) -> Result<Peer, String> {
+    // Attempt to connect to verify it's a DropBridge instance
+    // For now, we just check if the port is open and maybe in the future 
+    // we can do a proper handshake to get the name.
+    // For simplicity, we'll try to connect and if it works, we add it.
+    
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let _stream = timeout(Duration::from_secs(3), TcpStream::connect(format!("{}:{}", ip, port)))
+        .await
+        .map_err(|_| "Connection timed out".to_string())?
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+
+    let peer = Peer {
+        id: format!("manual:{}", ip),
+        name: format!("Manual: {}", ip),
+        ip: ip.clone(),
+        port,
+        last_seen: chrono::Utc::now().timestamp(),
+        device_type: "unknown".to_string(),
+    };
+
+    {
+        let mut peers = state.peers.lock().unwrap();
+        peers.insert(peer.id.clone(), peer.clone());
     }
     
-    Ok(history)
-}
-
-#[tauri::command]
-fn clear_history(state: tauri::State<'_, DbState>) -> Result<(), String> {
-    let conn = state.conn.lock().unwrap();
-    conn.execute("DELETE FROM transfers", []).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn get_settings(state: tauri::State<'_, DbState>) -> Result<HashMap<String, String>, String> {
-    let conn = state.conn.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT key, value FROM settings").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| e.to_string())?;
-
-    let mut settings = HashMap::new();
-    for row in rows {
-        let (key, value) = row.map_err(|e| e.to_string())?;
-        settings.insert(key, value);
-    }
-    Ok(settings)
-}
-
-#[tauri::command]
-fn save_settings(state: tauri::State<'_, DbState>, settings: HashMap<String, String>) -> Result<(), String> {
-    let conn = state.conn.lock().unwrap();
-    for (key, value) in settings {
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        ).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn claim_admin() -> Result<(), String> {
-    Ok(())
+    let _ = app.emit("peer_discovered", peer.clone());
+    Ok(peer)
 }
 
 #[tauri::command]
@@ -162,12 +208,14 @@ fn get_file_meta(path: String) -> Result<(String, u64), String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(DiscoveryState {
             peers: Arc::new(Mutex::new(HashMap::new())),
+            mdns: Mutex::new(None),
+            service_name: Mutex::new(None),
         })
         .manage(TransferState {
             pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -211,9 +259,16 @@ fn main() {
             clear_history,
             get_settings,
             save_settings,
-            claim_admin,
-            get_file_meta
+            get_file_meta,
+            direct_connect
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            println!("Application exiting, cleaning up...");
+            mdns::shutdown_discovery(handle);
+        }
+    });
 }

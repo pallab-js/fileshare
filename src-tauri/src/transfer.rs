@@ -5,7 +5,7 @@ use tokio::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::oneshot;
 use std::sync::Arc;
 use crate::{TransferState, DbState, db, TransferProgressWithSpeed};
 
@@ -103,11 +103,24 @@ where
 }
 
 fn sanitize_filename(name: &str) -> String {
-    Path::new(name)
+    let name = Path::new(name)
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("received_file")
-        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+        .unwrap_or("received_file");
+
+    let sanitized: String = name.chars()
+        .filter(|c| {
+            !c.is_control() && 
+            *c != '\0' &&
+            !['/', '\\', ':', '*', '?', '"', '<', '>', '|'].contains(c)
+        })
+        .collect();
+    
+    if sanitized.is_empty() {
+        "received_file".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -140,17 +153,37 @@ fn log_transfer_async(app: &AppHandle, direction: String, request: TransferReque
 pub async fn start_listener(app: AppHandle) -> Result<u16, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("0.0.0.0:0").await?;
     let port = listener.local_addr()?.port();
-    let sem = Arc::new(Semaphore::new(10));
+    let ip_counts = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<std::net::IpAddr, u32>::new()));
     
     tauri::async_runtime::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((mut stream, _)) => {
+                Ok((mut stream, addr)) => {
                     let app_handle = app.clone();
-                    let permit = sem.clone().acquire_owned().await.unwrap();
+                    let ip = addr.ip();
+                    let counts = ip_counts.clone();
+                    
+                    let mut counts_lock = counts.lock().await;
+                    let count = counts_lock.entry(ip).or_insert(0);
+                    if *count >= 3 {
+                        println!("Rate limit exceeded for IP: {}", ip);
+                        continue;
+                    }
+                    *count += 1;
+                    drop(counts_lock);
+
                     tauri::async_runtime::spawn(async move {
                         handle_incoming_transfer(app_handle, &mut stream).await;
-                        drop(permit);
+                        
+                        let mut counts_lock = counts.lock().await;
+                        if let Some(count) = counts_lock.get_mut(&ip) {
+                            if *count > 0 {
+                                *count -= 1;
+                            }
+                            if *count == 0 {
+                                counts_lock.remove(&ip);
+                            }
+                        }
                     });
                 }
                 Err(e) => eprintln!("TCP listener error: {}", e),
@@ -180,19 +213,28 @@ async fn handle_incoming_transfer(app: AppHandle, stream: &mut TcpStream) {
 
         let mut auto_accept = false;
         let mut save_dir_opt = None;
-        {
-            if let Ok(conn) = app.state::<DbState>().conn.lock() {
-                if let Ok(mut stmt) = conn.prepare("SELECT value FROM settings WHERE key = 'autoAccept'") {
-                    if let Ok(val) = stmt.query_row([], |row| row.get::<_, String>(0)) {
-                        auto_accept = val == "true";
-                    }
-                }
-                if let Ok(mut stmt) = conn.prepare("SELECT value FROM settings WHERE key = 'saveDirectory'") {
-                    if let Ok(val) = stmt.query_row([], |row| row.get::<_, String>(0)) {
-                        save_dir_opt = Some(val);
-                    }
-                }
-            }
+
+        let db_conn = app.state::<DbState>().conn.clone();
+        let settings = tokio::task::spawn_blocking(move || {
+            let conn = db_conn.lock().ok()?;
+            let auto_accept = conn.query_row(
+                "SELECT value FROM settings WHERE key = 'autoAccept'",
+                [],
+                |row| row.get::<_, String>(0)
+            ).map(|v| v == "true").unwrap_or(false);
+            
+            let save_dir = conn.query_row(
+                "SELECT value FROM settings WHERE key = 'saveDirectory'",
+                [],
+                |row| row.get::<_, String>(0)
+            ).ok();
+            
+            Some((auto_accept, save_dir))
+        }).await.unwrap_or(None);
+
+        if let Some((aa, sd)) = settings {
+            auto_accept = aa;
+            save_dir_opt = sd;
         }
 
         let accepted = if auto_accept {

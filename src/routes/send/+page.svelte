@@ -1,6 +1,6 @@
 <script lang="ts">
   import { File, X, UploadCloud, Laptop } from 'lucide-svelte';
-  import { peers, transfers, addToast } from '$lib/stores';
+  import { appState } from '$lib/stores.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { page } from '$app/stores';
   import { formatSize, formatSpeed, formatETA } from '$lib/utils';
@@ -28,7 +28,7 @@
         const [name, size] = await invoke<[string, number]>('get_file_meta', { path: p });
         files = [...files, { name, size, path: p }];
       } catch (e: any) {
-        addToast(e.toString(), 'error');
+        appState.addToast(e.toString(), 'error');
       }
     }
   }
@@ -48,7 +48,7 @@
   }
 
   async function sendFiles() {
-    const peer = $peers.find(p => p.id === selectedPeerId);
+    const peer = appState.peers.find(p => p.id === selectedPeerId);
     if (!peer || files.length === 0) return;
 
     for (const file of files) {
@@ -59,19 +59,16 @@
           port: peer.port
         });
 
-        transfers.update(list => [
-          {
-            id,
-            fileName: file.name,
-            fileSize: file.size,
-            sender: 'You',
-            progress: 0,
-            status: 'pending'
-          },
-          ...list
-        ]);
+        appState.addTransfer({
+          id,
+          fileName: file.name,
+          fileSize: file.size,
+          sender: 'You',
+          progress: 0,
+          status: 'pending'
+        });
       } catch (e: any) {
-        addToast(e.toString(), 'error');
+        appState.addToast(e.toString(), 'error');
       }
     }
     files = [];
@@ -85,7 +82,7 @@
   <div class="mb-10">
     <label class="block text-xs font-mono uppercase tracking-widest text-text-muted mb-4" for="recipient">Select Recipient</label>
     <div class="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-      {#each $peers as peer}
+      {#each appState.peers as peer}
         <button
           onclick={() => selectedPeerId = peer.id}
           class="flex-shrink-0 flex items-center gap-3 px-4 py-3 rounded-[6px] border transition-all duration-200
@@ -130,7 +127,7 @@
 
   <!-- Queue / Active Transfers -->
   <div class="space-y-3 mb-10">
-    {#if files.length > 0 || $transfers.some(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending'))}
+    {#if files.length > 0 || appState.transfers.some(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending'))}
       <label class="block text-xs font-mono uppercase tracking-widest text-text-muted mb-2" for="queue">Queue</label>
       
       {#each files as file, i}
@@ -153,7 +150,7 @@
         </div>
       {/each}
 
-      {#each $transfers.filter(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending')) as t}
+      {#each appState.transfers.filter(t => t.sender === 'You' && (t.status === 'streaming' || t.status === 'pending')) as t}
         <div class="flex items-center justify-between p-4 bg-surface border border-brand/40 rounded-[6px] group transition-all">
           <div class="flex items-center gap-4">
             <div class="w-10 h-10 bg-background border border-brand/20 rounded-[6px] flex items-center justify-center">
@@ -186,7 +183,7 @@
       disabled={!selectedPeerId || files.length === 0}
       class="px-8 py-3 bg-brand text-surface font-medium rounded-full transition-all hover:bg-brand-hover hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-brand/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
     >
-      Send to {$peers.find(r => r.id === selectedPeerId)?.name || 'Device'}
+      Send to {appState.peers.find(r => r.id === selectedPeerId)?.name || 'Device'}
     </button>
   </div>
 </div>

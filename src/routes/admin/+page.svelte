@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Shield, Activity, Users, HardDrive, RefreshCw, X, CheckCircle2 } from 'lucide-svelte';
-  import { peers, transfers, addToast } from '$lib/stores';
+  import { appState } from '$lib/stores.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { formatSize } from '$lib/utils';
@@ -13,7 +13,7 @@
 
   async function loadStats() {
     try {
-      stats.activePeers = $peers.length;
+      stats.activePeers = appState.peers.length;
       
       const history = await invoke<any[]>('get_history');
       const total = history
@@ -28,9 +28,9 @@
   async function cancelTransfer(id: string) {
     try {
       await invoke('cancel_transfer', { id });
-      addToast('Transfer cancellation requested', 'info');
+      appState.addToast('Transfer cancellation requested', 'info');
     } catch (e: any) {
-      addToast(e.toString(), 'error');
+      appState.addToast(e.toString(), 'error');
     }
   }
 
@@ -40,7 +40,7 @@
     return () => clearInterval(interval);
   });
 
-  let activeTransfers = $derived($transfers.filter(t => t.status === 'streaming'));
+  let activeTransfers = $derived(appState.transfers.filter(t => t.status === 'streaming'));
 </script>
 
 <div class="p-8 max-w-6xl mx-auto">
@@ -140,7 +140,7 @@
       <h2 class="text-xl font-medium leading-none mb-4">Audit Log</h2>
       <div class="bg-surface border border-border-card rounded-2xl p-6">
         <div class="space-y-4">
-          {#each $transfers.slice(0, 10) as log}
+          {#each appState.transfers.slice(0, 10) as log}
             <div class="flex gap-3">
               <div class="mt-1 w-1.5 h-1.5 rounded-full {log.status === 'failed' || log.status === 'cancelled' || log.status === 'declined' ? 'bg-danger' : 'bg-brand'}"></div>
               <div>

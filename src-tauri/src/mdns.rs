@@ -16,6 +16,8 @@ pub struct Peer {
 
 pub struct DiscoveryState {
     pub peers: Arc<Mutex<HashMap<String, Peer>>>,
+    pub mdns: Mutex<Option<ServiceDaemon>>,
+    pub service_name: Mutex<Option<String>>,
 }
 
 pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String) -> Result<(), Box<dyn std::error::Error>> {
@@ -59,6 +61,14 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
     let state = app.state::<DiscoveryState>();
     let peers_clone = state.peers.clone();
     
+    // Store daemon and service name for graceful shutdown
+    {
+        let mut m = state.mdns.lock().unwrap();
+        *m = Some(mdns);
+        let mut n = state.service_name.lock().unwrap();
+        *n = Some(my_name.clone());
+    }
+    
     tauri::async_runtime::spawn(async move {
         while let Ok(event) = receiver.recv_async().await {
             match event {
@@ -97,9 +107,13 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
                     
                     // Upsert to DB
                     let db_state = app.state::<crate::DbState>();
-                    if let Ok(conn) = db_state.conn.lock() {
-                        let _ = crate::db::upsert_peer(&conn, &peer);
-                    }
+                    let db_conn = db_state.conn.clone();
+                    let peer_for_db = peer.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let Ok(conn) = db_conn.lock() {
+                            let _ = crate::db::upsert_peer(&conn, &peer_for_db);
+                        }
+                    });
                     
                     let _ = app.emit("peer_discovered", peer);
                 }
@@ -114,4 +128,16 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
     });
     
     Ok(())
+}
+
+pub fn shutdown_discovery(app: &AppHandle) {
+    let state = app.state::<DiscoveryState>();
+    let mdns = state.mdns.lock().unwrap().take();
+    let service_name = state.service_name.lock().unwrap().take();
+
+    if let (Some(mdns), Some(name)) = (mdns, service_name) {
+        println!("Shutting down mDNS and unregistering {}", name);
+        let _ = mdns.unregister(&name);
+        let _ = mdns.shutdown();
+    }
 }

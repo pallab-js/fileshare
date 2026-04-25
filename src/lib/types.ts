@@ -1,5 +1,3 @@
-import { writable } from 'svelte/store';
-
 export interface Peer {
   id: string;
   name: string;
@@ -34,22 +32,8 @@ export interface TransferProgressPayload {
   speedBps: number;
 }
 
-export const peers = writable<Peer[]>([]);
-export const transfers = writable<Transfer[]>([]);
-export const pendingTransfer = writable<Transfer | null>(null);
-
 export interface Toast {
   id: string;
   message: string;
   type: 'success' | 'error' | 'info';
-}
-
-export const toasts = writable<Toast[]>([]);
-
-export function addToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
-  const id = crypto.randomUUID();
-  toasts.update(t => [...t, { id, message, type }]);
-  setTimeout(() => {
-    toasts.update(t => t.filter(x => x.id !== id));
-  }, 3000);
 }
