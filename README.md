@@ -7,7 +7,7 @@
 
 **DropBridge** is a professional-grade, cross-platform P2P file-sharing application designed for the modern desktop. Built with Rust and Svelte 5, it offers a "Local First" experience—allowing you to discover and transfer files across your LAN with zero configuration, zero cloud dependencies, and uncompromising security.
 
-![DropBridge Hero](https://via.placeholder.com/1000x500.png?text=DropBridge+Professional+UI+Preview)
+![DropBridge Hero](static/images/hero.png)
 
 ## ✨ Core Features
 
@@ -23,7 +23,7 @@
   - **Graceful Shutdown**: Intercepts OS signals to cleanly unregister services, preventing "ghost" mDNS records.
 - **📜 Smart History**: Filterable, paginated transfer logs stored in a high-concurrency SQLite database (WAL mode).
 - **⚙️ Desktop Native**:
-  - Native file/directory pickers.
+  - Native file/directory pickers using Tauri's dialog system.
   - System-level notifications for transfer requests and completion.
   - Automatic cleanup of stale peer records older than 24 hours.
 
@@ -34,6 +34,7 @@
 - **Async Runtime**: [Tokio](https://tokio.rs/)
 - **Database**: SQLite via [rusqlite](https://github.com/rusqlite/rusqlite) (Async-wrapped with `spawn_blocking`)
 - **Networking**: [mdns-sd](https://github.com/pro_logic/mdns-sd) for discovery
+- **Design System**: Inspired by Supabase—Dark mode native, HSL color tokens, and geometric typography.
 
 ## 🛠️ Getting Started
 
