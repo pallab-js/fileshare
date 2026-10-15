@@ -38,7 +38,6 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
     let device_type = if cfg!(target_os = "macos") { "mac" }
         else if cfg!(target_os = "windows") { "windows" }
         else { "linux" };
-
     let properties = [
         ("name", display_name),
         ("device_type", device_type.to_string()),
@@ -60,6 +59,10 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
     
     let state = app.state::<DiscoveryState>();
     let peers_clone = state.peers.clone();
+
+    // Capture our own LAN IP once up-front for self-filtering. Recomputing it on
+    // every resolved event is wasteful and still only covers a single interface.
+    let my_ip_str = my_ip.clone();
     
     // Store daemon and service name for graceful shutdown
     {
@@ -76,7 +79,6 @@ pub fn start_discovery(app: AppHandle, transfer_port: u16, display_name: String)
                     let peer_id = info.get_fullname().to_string();
                     let ip = info.get_addresses().iter().next().map(|ip| ip.to_string()).unwrap_or_default();
                     
-                    let my_ip_str = local_ip_address::local_ip().map(|ip| ip.to_string()).unwrap_or_default();
                     if ip == my_ip_str {
                         continue;
                     }

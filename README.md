@@ -1,93 +1,120 @@
 # DropBridge
 
-[![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri&logoColor=white)](https://tauri.app/)
-[![Svelte](https://img.svelte.io/badge/Svelte-5.0-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
-[![Rust](https://img.shields.io/badge/Rust-1.75+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-3ecf8e.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/pallab-js/fileshare/actions/workflows/ci.yml/badge.svg)](https://github.com/pallab-js/fileshare/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=white)](https://tauri.app/)
+[![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
 
-**DropBridge** is a professional-grade, cross-platform P2P file-sharing application designed for the modern desktop. Built with Rust and Svelte 5, it offers a "Local First" experience—allowing you to discover and transfer files across your LAN with zero configuration, zero cloud dependencies, and uncompromising security.
+Cross-platform peer-to-peer file sharing over your local network. Discover devices automatically, send files directly — no cloud and no account required.
 
-![DropBridge Hero](static/images/hero.png)
+![DropBridge](static/images/hero.png)
 
-## ✨ Core Features
+## Features
 
-- **🚀 High-Performance Streaming**: Custom length-prefixed TCP framing protocol with 1MB optimized buffers for maximum throughput on Gigabit networks.
-- **🔍 Hybrid Discovery**: 
-  - **Zero-Config**: Automatic peer discovery via mDNS (Bonjour/Avahi).
-  - **Direct Connect**: Manual IP/Port fallback for environments where mDNS is blocked by AP Isolation.
-- **📊 Real-Time Analytics**: Precise speed tracking using a rolling 3-second sampler, live ETA calculations, and aggregate bandwidth monitoring.
-- **🛡️ Security Hardened**: 
-  - **Robust Sanitization**: Strips Windows-forbidden characters, control characters, and null bytes to prevent path traversal and filesystem errors.
-  - **Per-IP Throttling**: Limits concurrent connections to 3 per IP address to prevent local resource exhaustion and DoS.
-  - **Collision Prevention**: Automatic unique path resolution (e.g., `file (1).png`).
-  - **Graceful Shutdown**: Intercepts OS signals to cleanly unregister services, preventing "ghost" mDNS records.
-- **📜 Smart History**: Filterable, paginated transfer logs stored in a high-concurrency SQLite database (WAL mode).
-- **⚙️ Desktop Native**:
-  - Native file/directory pickers using Tauri's dialog system.
-  - System-level notifications for transfer requests and completion.
-  - Automatic cleanup of stale peer records older than 24 hours.
+- **Automatic discovery** — finds other DropBridge devices on the same LAN via mDNS.
+- **Direct connect** — fall back to manual IP + port when mDNS is blocked (e.g. AP isolation).
+- **Streaming transfers** — length-prefixed TCP framing with 1 MB buffers and live progress, speed, and ETA.
+- **Transfer history** — stored locally in SQLite (WAL mode), filterable and paginated.
+- **Desktop native** — native file pickers, system notifications, and graceful mDNS cleanup on exit.
+- **Safe writes** — incoming filenames are sanitized and collisions are resolved automatically (`file (1).png`).
+- **Basic DoS protection** — concurrent inbound connections are capped at 3 per source IP.
 
-## 🚀 Tech Stack
+## How it works
 
-- **Frontend**: [Svelte 5](https://svelte.dev/) (Runes), TypeScript, [Tailwind CSS](https://tailwindcss.com/)
-- **Backend**: [Rust](https://www.rust-lang.org/), [Tauri 2.0](https://tauri.app/)
-- **Async Runtime**: [Tokio](https://tokio.rs/)
-- **Database**: SQLite via [rusqlite](https://github.com/rusqlite/rusqlite) (Async-wrapped with `spawn_blocking`)
-- **Networking**: [mdns-sd](https://github.com/pro_logic/mdns-sd) for discovery
-- **Design System**: Inspired by Supabase—Dark mode native, HSL color tokens, and geometric typography.
+```
+Device A                                 Device B
+  │  1. mDNS discovery (_dropbridge._tcp)  │
+  │ ◄────────────────────────────────────►│
+  │  2. TCP connect + JSON transfer request│
+  │ ──────────────────────────────────────►│
+  │  3. accept / decline response          │
+  │ ◄──────────────────────────────────────│
+  │  4. streamed file bytes + progress     │
+  │ ──────────────────────────────────────►│
+```
 
-## 🛠️ Getting Started
+Each transfer opens a dedicated TCP connection. A length-prefixed JSON header describes the file,
+the receiver accepts or declines, and the payload is then streamed with periodic progress events
+emitted to the UI.
+
+## Tech stack
+
+| Layer     | Technology                                               |
+| --------- | -------------------------------------------------------- |
+| Frontend  | Svelte 5 (Runes), TypeScript, Tailwind CSS               |
+| Backend   | Rust, Tauri 2, Tokio                                     |
+| Storage   | SQLite via `rusqlite` (off-thread with `spawn_blocking`) |
+| Discovery | mDNS via `mdns-sd`                                       |
+
+## Getting started
 
 ### Prerequisites
 
-- **Node.js**: v18 or later
-- **Rust**: v1.75 or later (stable)
-- **pnpm**: `npm install -g pnpm`
+- [Node.js](https://nodejs.org/) 18+
+- [pnpm](https://pnpm.io/) (`npm install -g pnpm`)
+- [Rust](https://www.rust-lang.org/tools/install) (stable)
+- Platform build dependencies from the [Tauri prerequisites](https://tauri.app/start/prerequisites/)
 
-### Installation
+### Install and run
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/pallab-js/fileshare.git
-    cd fileshare
-    ```
+```bash
+git clone https://github.com/pallab-js/fileshare.git
+cd fileshare
+pnpm install
+pnpm tauri dev
+```
 
-2.  **Install dependencies**:
-    ```bash
-    pnpm install
-    ```
+### Build a release bundle
 
-3.  **Run in development**:
-    ```bash
-    pnpm tauri dev
-    ```
-
-### Production Build
-
-To generate a production-ready installer for your current platform:
 ```bash
 pnpm tauri build
 ```
 
-## 🛡️ Security & Privacy Philosophy
+The installer for your current platform is written to `src-tauri/target/release/bundle/`.
 
-DropBridge is built on the principle of **Network Sovereignty**:
-- **Metadata Privacy**: Peer discovery is limited to your local network. No external "handshake" servers are used.
-- **End-to-End Local**: File data flows directly from the sender's memory/disk to the receiver's.
-- **Non-Blocking Safety**: All database and I/O operations are offloaded to background threads to ensure UI responsiveness even during heavy transfers.
+## Security & privacy
 
-## 🤝 Contributing
+DropBridge is designed for use on **trusted local networks**:
 
-We welcome contributions from the community! 
+- Discovery and transfers never leave your LAN — there are no external relay or handshake servers.
+- Peer metadata (name, IP, last seen) is stored only in a local SQLite database.
 
-1.  Check the [CONTRIBUTING.md](CONTRIBUTING.md) for our development workflow.
-2.  Follow the [DESIGN.md](DESIGN.md) for UI guidelines (Supabase-inspired design system).
-3.  Ensure `pnpm check` and `cd src-tauri && cargo check` pass before submitting PRs.
+> [!IMPORTANT]
+> Transfers are currently sent **unencrypted** over plain TCP, and peers are not
+> authenticated. Anyone on the same network can send you a transfer request (which
+> you must accept) and could observe traffic in transit. Do not use DropBridge on
+> untrusted networks for sensitive data. Transport encryption and peer
+> authentication are planned — see the [Roadmap](#roadmap).
 
-## 📄 License
+## Roadmap
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- [ ] Transport encryption (TLS) for file streams
+- [ ] Peer authentication / pairing
+- [ ] Transfer integrity verification (checksums)
+- [ ] Resumable transfers
 
----
+## Project layout
 
-Built with precision by the **DropBridge Team**.
+```
+src/            SvelteKit frontend (routes, stores, types, utils)
+src-tauri/src/
+  main.rs       Tauri commands and app wiring
+  mdns.rs       Service registration & peer discovery
+  transfer.rs   TCP transfer protocol & streaming
+  db.rs         SQLite schema & queries
+```
+
+## Contributing
+
+Contributions are welcome. Before opening a PR, make sure checks pass:
+
+```bash
+pnpm check
+cd src-tauri && cargo check && cargo clippy --all-targets -- -D warnings
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [DESIGN.md](DESIGN.md) for workflow and UI guidelines.
+
+## License
+
+Released under the [MIT License](LICENSE).

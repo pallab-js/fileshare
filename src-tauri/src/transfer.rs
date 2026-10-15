@@ -40,7 +40,7 @@ impl SpeedSampler {
         let (newest_t, newest_b) = self.window.back().unwrap();
         let elapsed = newest_t.duration_since(*oldest_t).as_secs_f64();
         if elapsed <= 0.0 { return 0; }
-        ((newest_b - oldest_b) as f64 / elapsed) as u64
+        ((newest_b.saturating_sub(*oldest_b)) as f64 / elapsed) as u64
     }
 }
 
@@ -148,6 +148,16 @@ fn log_transfer_async(app: &AppHandle, direction: String, request: TransferReque
             let _ = db::log_transfer(&conn, &direction, &request, &status);
         }
     });
+}
+
+/// Emit a `transfer_failed` event to the frontend and record the failure in history.
+/// Used on the sender side so the UI never leaves a transfer stuck on "pending".
+fn emit_send_failure(app: &AppHandle, request: TransferRequest, reason: &str) {
+    let _ = app.emit("transfer_failed", serde_json::json!({
+        "id": request.id,
+        "reason": reason,
+    }));
+    log_transfer_async(app, "sent".to_string(), request, "failed".to_string());
 }
 
 pub async fn start_listener(app: AppHandle) -> Result<u16, Box<dyn std::error::Error>> {
@@ -344,11 +354,7 @@ pub async fn send_file(
         let mut stream = match TcpStream::connect(format!("{}:{}", recipient_ip, recipient_port)).await {
             Ok(s) => s,
             Err(e) => {
-                let _ = app_handle.emit("transfer_failed", serde_json::json!({
-                    "id": request.id,
-                    "reason": e.to_string()
-                }));
-                log_transfer_async(&app_handle, "sent".to_string(), request, "failed".to_string());
+                emit_send_failure(&app_handle, request, &e.to_string());
                 return;
             }
         };
@@ -359,36 +365,50 @@ pub async fn send_file(
         let _ = stream.write_all(&(request_json.len() as u32).to_le_bytes()).await;
         let _ = stream.write_all(&request_json).await;
         
+        // Read the recipient's response to our request. Any failure here leaves
+        // the sender UI stuck on "pending", so surface it as an explicit failure.
         let mut len_buf = [0u8; 4];
-        if stream.read_exact(&mut len_buf).await.is_err() { return; }
+        if stream.read_exact(&mut len_buf).await.is_err() {
+            emit_send_failure(&app_handle, request, "No response from recipient");
+            return;
+        }
         let len = u32::from_le_bytes(len_buf) as usize;
         let mut resp_buf = vec![0u8; len];
-        if stream.read_exact(&mut resp_buf).await.is_err() { return; }
+        if stream.read_exact(&mut resp_buf).await.is_err() {
+            emit_send_failure(&app_handle, request, "Incomplete response from recipient");
+            return;
+        }
         
         let response: serde_json::Value = serde_json::from_slice(&resp_buf).unwrap_or_default();
         if response["type"] == "accept" {
-            if let Ok(file) = File::open(&file_path).await {
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                {
-                    let state = app_handle.state::<TransferState>();
-                    let mut active = state.active.lock().await;
-                    active.insert(request.id.clone(), cancel_tx);
+            let file = match File::open(&file_path).await {
+                Ok(f) => f,
+                Err(e) => {
+                    emit_send_failure(&app_handle, request, &format!("Could not open file: {}", e));
+                    return;
                 }
+            };
 
-                let success = stream_with_progress(&app_handle, &request.id, file, stream, request.file_size, cancel_rx).await;
-                
-                {
-                    let state = app_handle.state::<TransferState>();
-                    let mut active = state.active.lock().await;
-                    active.remove(&request.id);
-                }
+            let (cancel_tx, cancel_rx) = oneshot::channel();
+            {
+                let state = app_handle.state::<TransferState>();
+                let mut active = state.active.lock().await;
+                active.insert(request.id.clone(), cancel_tx);
+            }
 
-                if success {
-                    let _ = app_handle.emit("transfer_completed", request.id.clone());
-                    log_transfer_async(&app_handle, "sent".to_string(), request, "completed".to_string());
-                } else {
-                    log_transfer_async(&app_handle, "sent".to_string(), request, "failed".to_string());
-                }
+            let success = stream_with_progress(&app_handle, &request.id, file, stream, request.file_size, cancel_rx).await;
+
+            {
+                let state = app_handle.state::<TransferState>();
+                let mut active = state.active.lock().await;
+                active.remove(&request.id);
+            }
+
+            if success {
+                let _ = app_handle.emit("transfer_completed", request.id.clone());
+                log_transfer_async(&app_handle, "sent".to_string(), request, "completed".to_string());
+            } else {
+                log_transfer_async(&app_handle, "sent".to_string(), request, "failed".to_string());
             }
         } else {
             let _ = app_handle.emit("transfer_declined", request.id.clone());
