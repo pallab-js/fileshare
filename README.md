@@ -7,8 +7,6 @@
 
 Cross-platform peer-to-peer file sharing over your local network. Discover devices automatically, send files directly — no cloud and no account required.
 
-![DropBridge](static/images/hero.png)
-
 ## Features
 
 - **Automatic discovery** — finds other DropBridge devices on the same LAN via mDNS.
